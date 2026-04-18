@@ -1,0 +1,20 @@
+AXI4_REGS tool goals:
+  - Fully AXI4 compliant memory slave that maps addresses to discreet fields defined in a value file
+  - Possible AXI4-Lite support
+  - Multiple value files in a project for different AXI_REGS instances
+  - Value field description defined by a plain-text format like CSV
+  - Cross platform editor tool that generates C/C++/Verilog/VHDL/TOML/etc. value files
+  - Byte boundary separated fields to be default
+  - Xilinx IP integrator packaging and support scripts
+  - Register support for the following:
+      - Arrays of values
+      - Default or reset values
+      - Read only values
+      - Clear-on-read values
+      - Values where write/read are decoupled
+  - Fields:
+      - Register Name <[array:size]>
+      - Size (bits)
+      - R/W/RW/etc.
+      - Type (string)
+      - Description
