@@ -1,2 +1,2 @@
-Register Name, Size (bits), R/W/RW/etc., Type (string), Description
-Scratch, 32, RW, System, Scratch register for system
+"Register Name","Size (bits)","R/W/RW/etc.","Type (string)","Description"
+Scratch,32,RW,System,"Scratch register for system test\nsecond line"

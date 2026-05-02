@@ -6,6 +6,7 @@ Reads a CSV file and displays it using the pandastable library.
 
 import sys
 from pathlib import Path
+from IPython.display import display, HTML
 
 try:
     import pandas as pd
@@ -51,10 +52,19 @@ class AutoSaveTable(Table):
                 # Update the model
                 self.model.setValueAt(text, row, col)
                 self.redraw()
+                self.autoResizeColumns()
                 
         except Exception as e:
             print(f"Error saving cell: {e}")
     
+    def drawCellText(self, row, col, text, x, y, w, h):
+        self.canvas.create_text(
+            x+2, y+2,
+            anchor='nw',
+            text=text,
+            width=w-4  # forces wrapping
+        )
+        
     def drawCellEntry(self, row, col, text=None):
         """Override to bind focus out event."""
         super().drawCellEntry(row, col, text)
@@ -120,6 +130,9 @@ class CSVViewer:
             if self.df.empty:
                 self.info_label.config(text="Error: CSV file is empty")
                 return
+            pd.set_option('display.max_colwidth', None)
+            pd.set_option('display.max_rows', None)
+            self.df.style.set_properties(**{'white-space': 'pre-wrap','line-height': '400px',})
             
             # Update info label
             rows, cols = self.df.shape
@@ -130,11 +143,18 @@ class CSVViewer:
                         f"Missing values: {missing}")
             self.info_label.config(text=info_text)
             
+            self.df['Description'] = self.df['Description'].str.replace(r'\\n', '\n', regex=True)
+            print(self.df.to_markdown(index=False))
+            
             # Create the table with auto-save functionality
             self.table = AutoSaveTable(self.main_frame, dataframe=self.df,
                                       showtoolbar=True, showstatusbar=True,
                                       editable=True)
+            self.table.wrapText = True
             self.table.show()
+            self.table.rowheight = 70
+            self.table.redraw()
+            
             
             # Print summary to console
             print(f"\n{'='*80}")
@@ -171,6 +191,7 @@ class CSVViewer:
         try:
             # Get the current dataframe from the table (in case user made changes)
             current_df = self.table.model.df
+            current_df['Description'] = current_df['Description'].str.replace('\n', r'\\n', regex=True)
             
             # Open file dialog to choose save location
             default_filename = Path(self.csv_file).stem + "_exported.csv"
