@@ -1,335 +1,192 @@
-#!/usr/bin/env python3
-"""
-CSV Reader with PandasTable (Tkinter GUI)
-Reads a CSV file and displays it using the pandastable library.
-"""
 
 import sys
-from pathlib import Path
-from IPython.display import display, HTML
-
-try:
-    import pandas as pd
-except ImportError:
-    print("Error: pandas is not installed. Install it with: pip install pandas")
-    sys.exit(1)
-
-try:
-    from pandastable import Table, TableModel
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
-except ImportError:
-    print("Error: pandastable is not installed.")
-    print("Install it with: pip install pandastable")
-    print("\nNote: This also requires tkinter, which comes with Python on most systems.")
-    sys.exit(1)
+import pandas as pd
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QTableView,
+    QFileDialog, QWidget, QVBoxLayout,
+    QPushButton, QHBoxLayout, QMessageBox
+)
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex
 
 
-class AutoSaveTable(Table):
-    """Custom Table that auto-saves cell edits on focus loss."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-    def handle_left_click(self, event):
-        """Override to save cell entry before moving to next cell."""
-        print("Autosaving...")
-        # Save the current cell entry if it exists
-        if hasattr(self, 'cellentry') and self.cellentry.winfo_exists():
-            self.handle_entry_save()
-        
-        # Call the parent's left click handler
-        super().handle_left_click(event)
-    
-    def handle_entry_save(self):
-        """Save the current cell entry value."""
-        try:
-            if hasattr(self, 'cellentry'):
-                row = self.currentrow
-                col = self.currentcol
-                text = self.cellentry.get()
-                print(f"saving {text} at {row} {col}")
-                # Update the model
-                self.model.setValueAt(text, row, col)
-                self.redraw()
-                self.autoResizeColumns()
-                
-        except Exception as e:
-            print(f"Error saving cell: {e}")
-    
-    def drawCellText(self, row, col, text, x, y, w, h):
-        self.canvas.create_text(
-            x+2, y+2,
-            anchor='nw',
-            text=text,
-            width=w-4  # forces wrapping
+class PandasModel(QAbstractTableModel):
+    def __init__(self, df):
+        super().__init__()
+        self._df = df
+
+    def rowCount(self, parent=None):
+        return len(self._df)
+
+    def columnCount(self, parent=None):
+        return len(self._df.columns)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            value = self._df.iat[index.row(), index.column()]
+            return str(value)
+        return None
+
+    def headerData(self, section, orientation, role):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                return str(self._df.columns[section])
+            else:
+                return str(section)
+        return None
+
+    # ✅ Make cells editable
+    def flags(self, index):
+        return (
+            Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsEditable
         )
-        
-    def drawCellEntry(self, row, col, text=None):
-        """Override to bind focus out event."""
-        super().drawCellEntry(row, col, text)
-        
-        # Bind focus out to save
-        if hasattr(self, 'cellentry'):
-            self.cellentry.bind('<FocusOut>', lambda e: self.handle_entry_save())
-            # Also save on Escape key
-            self.cellentry.bind('<Escape>', lambda e: self.handle_entry_save())
 
+    # ✅ Handle edits
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if role == Qt.ItemDataRole.EditRole:
+            row = index.row()
+            col = index.column()
 
-class CSVViewer:
-    """CSV Viewer application using pandastable."""
+            current = self._df.iat[row, col]
+
+            # Try to preserve type
+            try:
+                if isinstance(current, int):
+                    value = int(value)
+                elif isinstance(current, float):
+                    value = float(value)
+            except ValueError:
+                return False  # reject invalid input
+
+            self._df.iat[row, col] = value
+
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole])
+            return True
+
+        return False
     
-    def __init__(self, csv_file):
-        self.csv_file = csv_file
-        self.df = None
-        self.root = tk.Tk()
-        self.setup_window()
-        self.load_data()
-        
-    def setup_window(self):
-        """Setup the main window."""
-        self.root.title(f"CSV Viewer - {Path(self.csv_file).name}")
-        self.root.geometry("1200x700")
-        
-        # Create info frame at top
-        info_frame = ttk.Frame(self.root, padding="10")
-        info_frame.pack(side=tk.TOP, fill=tk.X)
-        
-        self.info_label = ttk.Label(info_frame, text="Loading...", font=('Arial', 10))
-        self.info_label.pack(side=tk.LEFT)
-        
-        # Button frame on the right
-        button_frame = ttk.Frame(info_frame)
-        button_frame.pack(side=tk.RIGHT)
-        
-        # Add row button
-        add_row_btn = ttk.Button(button_frame, text="➕ Add Row", 
-                                command=self.add_row)
-        add_row_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Delete row button
-        delete_row_btn = ttk.Button(button_frame, text="🗑️ Delete Row(s)", 
-                                   command=self.delete_rows)
-        delete_row_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Export button
-        export_btn = ttk.Button(button_frame, text="📥 Export to CSV", 
-                               command=self.export_to_csv)
-        export_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Create main frame for table
-        self.main_frame = tk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-        
-    def load_data(self):
-        """Load CSV data and create table."""
-        try:
-            # Read CSV file
-            self.df = pd.read_csv(self.csv_file)
-            
-            if self.df.empty:
-                self.info_label.config(text="Error: CSV file is empty")
-                return
-            pd.set_option('display.max_colwidth', None)
-            pd.set_option('display.max_rows', None)
-            self.df.style.set_properties(**{'white-space': 'pre-wrap','line-height': '400px',})
-            
-            # Update info label
-            rows, cols = self.df.shape
-            missing = self.df.isnull().sum().sum()
-            info_text = (f"File: {self.csv_file} | "
-                        f"Rows: {rows:,} | "
-                        f"Columns: {cols} | "
-                        f"Missing values: {missing}")
-            self.info_label.config(text=info_text)
-            
-            self.df['Description'] = self.df['Description'].str.replace(r'\\n', '\n', regex=True)
-            print(self.df.to_markdown(index=False))
-            
-            # Create the table with auto-save functionality
-            self.table = AutoSaveTable(self.main_frame, dataframe=self.df,
-                                      showtoolbar=True, showstatusbar=True,
-                                      editable=True)
-            self.table.wrapText = True
-            self.table.show()
-            self.table.rowheight = 70
-            self.table.redraw()
-            
-            
-            # Print summary to console
-            print(f"\n{'='*80}")
-            print(f"CSV Viewer - {Path(self.csv_file).name}")
-            print(f"{'='*80}")
-            print(f"Rows: {rows:,}")
-            print(f"Columns: {cols}")
-            print(f"Column names: {', '.join(self.df.columns.tolist())}")
-            print(f"Missing values: {missing}")
-            print(f"\nData types:")
-            print(self.df.dtypes)
-            print(f"\n{'='*80}")
-            print("Table opened in GUI window. Close the window to exit.")
-            
-        except FileNotFoundError:
-            self.info_label.config(text=f"Error: File '{self.csv_file}' not found")
-            print(f"Error: File '{self.csv_file}' not found.")
-            sys.exit(1)
-        except pd.errors.EmptyDataError:
-            self.info_label.config(text="Error: CSV file is empty or invalid")
-            print("Error: The CSV file is empty or invalid.")
-            sys.exit(1)
-        except Exception as e:
-            self.info_label.config(text=f"Error: {str(e)}")
-            print(f"Error reading CSV file: {e}")
-            sys.exit(1)
+    def insertRow(self, position, parent=QModelIndex()):
+        self.beginInsertRows(QModelIndex(), position, position)
+        position = position + 1
+        empty_row = {col: "" for col in self._df.columns}
+        self._df = pd.concat(
+            [self._df.iloc[:position],
+             pd.DataFrame([empty_row]),
+             self._df.iloc[position:]]
+        ).reset_index(drop=True)
+
+        self.endInsertRows()
+        return True
+
     
-    def export_to_csv(self):
-        """Export the current DataFrame to a CSV file."""
-        if self.df is None:
-            messagebox.showerror("Error", "No data to export")
+    def removeRow(self, position, parent=QModelIndex()):
+        if position < 0 or position >= len(self._df):
+            return False
+
+        self.beginRemoveRows(QModelIndex(), position, position)
+
+        self._df = self._df.drop(self._df.index[position]).reset_index(drop=True)
+
+        self.endRemoveRows()
+        return True
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Editable CSV Viewer")
+
+        self.table = QTableView()
+
+        # Buttons
+        load_btn = QPushButton("Load CSV")
+        save_btn = QPushButton("Save CSV")
+        add_btn = QPushButton("Add Row")
+        del_btn = QPushButton("Delete Row")
+
+        load_btn.clicked.connect(self.load_csv)
+        save_btn.clicked.connect(self.save_csv)
+        add_btn.clicked.connect(self.add_row)
+        del_btn.clicked.connect(self.delete_row)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(load_btn)
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(del_btn)
+
+        layout = QVBoxLayout()
+        layout.addLayout(btn_layout)
+        layout.addWidget(self.table)
+
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
+
+        self.model = None
+
+    def load_csv(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open CSV", "", "CSV Files (*.csv)"
+        )
+
+        if file_path:
+            df = pd.read_csv(file_path)
+            df['Description'] = df['Description'].str.replace(r'\\n', '\n', regex=True)
+            
+            self.model = PandasModel(df)
+            self.table.setModel(self.model)
+
+            # Enable wrapping + resizing
+            self.table.setWordWrap(True)
+            self.table.resizeColumnsToContents()
+            self.table.resizeRowsToContents()
+            self.table.horizontalHeader().setStretchLastSection(True)
+
+    def save_csv(self):
+        if not self.model:
             return
-        
-        try:
-            # Get the current dataframe from the table (in case user made changes)
-            current_df = self.table.model.df
-            current_df['Description'] = current_df['Description'].str.replace('\n', r'\\n', regex=True)
-            
-            # Open file dialog to choose save location
-            default_filename = Path(self.csv_file).stem + "_exported.csv"
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-                initialfile=default_filename,
-                title="Export to CSV"
-            )
-            
-            if file_path:  # If user didn't cancel
-                current_df.to_csv(file_path, index=False)
-                messagebox.showinfo("Success", f"Data exported successfully to:\n{file_path}")
-                print(f"\n✓ Data exported to: {file_path}")
-                
-        except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export data:\n{str(e)}")
-            print(f"Export error: {e}")
-    
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save CSV", "", "CSV Files (*.csv)"
+        )
+
+        if file_path:
+            self.model._df.to_csv(file_path, index=False)
+
+
     def add_row(self):
-        """Add a new empty row to the table."""
-        if self.table is None:
+        if not self.model:
             return
+            
+        selected = self.table.selectionModel().selectedRows()
         
-        try:
-            # Get current dataframe
-            df = self.table.model.df
-            
-            # Create a new row with NaN values (or empty strings for object columns)
-            new_row = {}
-            for col in df.columns:
-                if df[col].dtype == 'object':
-                    new_row[col] = ''
-                else:
-                    new_row[col] = pd.NA
-            
-            # Add the new row using pandas concat
-            new_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            
-            # Update the table model with the new dataframe
-            self.table.model.df = new_df
-            self.table.redraw()
-            
-            # Scroll to bottom to show the new row
-            self.table.setSelectedRow(len(new_df) - 1)
-            
-            # Update info label
-            rows = len(new_df)
-            cols = len(new_df.columns)
-            missing = new_df.isnull().sum().sum()
-            info_text = (f"File: {self.csv_file} | "
-                        f"Rows: {rows:,} | "
-                        f"Columns: {cols} | "
-                        f"Missing values: {missing}")
-            self.info_label.config(text=info_text)
-            
-            print(f"✓ Added new row (total rows: {rows})")
-            print(f"  Tip: Double-click cells to edit them")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add row:\n{str(e)}")
-            print(f"Add row error: {e}")
-    
-    def delete_rows(self):
-        """Delete selected row(s) from the table."""
-        if self.table is None:
+        if not selected:
+            QMessageBox.warning(self, "No selection", "Select a row to add below.")
             return
-        
-        try:
-            # Get selected rows
-            if not hasattr(self.table, 'multiplerowlist') or len(self.table.multiplerowlist) == 0:
-                messagebox.showwarning("No Selection", 
-                                     "Please select one or more rows to delete.\n\n"
-                                     "Tip: Click on row numbers to select rows.")
-                return
             
-            num_selected = len(self.table.multiplerowlist)
-            
-            # Ask for confirmation
-            response = messagebox.askyesno("Confirm Delete", 
-                                          f"Delete {num_selected} selected row(s)?")
-            
-            if response:
-                self.table.deleteRow()
-                self.table.redraw()
-                
-                # Update info label
-                rows = len(self.table.model.df)
-                cols = len(self.table.model.df.columns)
-                missing = self.table.model.df.isnull().sum().sum()
-                info_text = (f"File: {self.csv_file} | "
-                            f"Rows: {rows:,} | "
-                            f"Columns: {cols} | "
-                            f"Missing values: {missing}")
-                self.info_label.config(text=info_text)
-                
-                print(f"✓ Deleted {num_selected} row(s) (total rows: {rows})")
-                
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to delete rows:\n{str(e)}")
-            print(f"Delete row error: {e}")
-    
-    def run(self):
-        """Start the GUI event loop."""
-        self.root.mainloop()
+        # add from bottom to top (safe for multiple selection)
+        for index in sorted(selected, key=lambda x: x.row(), reverse=True):
+            self.model.insertRow(index.row())
 
 
-def main():
-    """Main function."""
-    if len(sys.argv) < 2:
-        print("CSV Reader with PandasTable")
-        print("="*50)
-        print("\nUsage: python read_csv_pandastable.py <csv_file_path>")
-        print("Example: python read_csv_pandastable.py data.csv")
-        print("\nThis will open an interactive GUI window with:")
-        print("  - Sortable columns")
-        print("  - Built-in toolbar for data manipulation")
-        print("  - ➕ Add Row button - adds empty rows")
-        print("  - 🗑️ Delete Row(s) button - removes selected rows")
-        print("  - 📥 Export to CSV button - saves your changes")
-        print("  - Double-click cells to edit values")
-        print("  - Auto-save on clicking away (no need to press Enter!)")
-        print("  - Plotting capabilities")
-        print("\nTips:")
-        print("  - Double-click any cell to edit its value")
-        print("  - Click away or press Enter to save changes")
-        print("  - Click row numbers to select rows for deletion")
-        print("  - Use Ctrl+Click (Cmd+Click on Mac) to select multiple rows")
-        print("\nRequirements:")
-        print("  pip install pandas pandastable")
-        sys.exit(1)
-    
-    csv_file = sys.argv[1]
-    
-    # Create and run the viewer
-    viewer = CSVViewer(csv_file)
-    viewer.run()
+    def delete_row(self):
+        if not self.model:
+            return
 
+        selected = self.table.selectionModel().selectedRows()
+
+        if not selected:
+            QMessageBox.warning(self, "No selection", "Select a row to delete.")
+            return
+
+        # delete from bottom to top (safe for multiple selection)
+        for index in sorted(selected, key=lambda x: x.row(), reverse=True):
+            self.model.removeRow(index.row())
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.resize(900, 600)
+    window.show()
+    sys.exit(app.exec())
