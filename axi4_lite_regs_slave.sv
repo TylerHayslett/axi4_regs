@@ -13,7 +13,7 @@
 //   * BRESP/RRESP always OKAY (2'b00).
 //------------------------------------------------------------------------------
 
-package axi4_lite_regs_user_pkg;
+package axi4_lite_regs_user_pkg_sv;
 
     function automatic void reg_access(
         input  logic [31:0] addr,
@@ -26,7 +26,7 @@ package axi4_lite_regs_user_pkg;
         rdata = 32'h0000_0000;
     endfunction
 
-endpackage : axi4_lite_regs_user_pkg
+endpackage : axi4_lite_regs_user_pkg_sv
 
 
 module axi4_lite_regs_slave #(

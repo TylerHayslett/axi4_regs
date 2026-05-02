@@ -17,7 +17,7 @@
 //     implement real register behavior.
 //------------------------------------------------------------------------------
 
-package axi4_regs_user_pkg;
+package axi4_regs_user_pkg_sv;
 
     //--------------------------------------------------------------------------
     // reg_access
@@ -43,7 +43,7 @@ package axi4_regs_user_pkg;
         rdata = 32'h0000_0000;
     endfunction
 
-endpackage : axi4_regs_user_pkg
+endpackage : axi4_regs_user_pkg_sv
 
 
 //------------------------------------------------------------------------------

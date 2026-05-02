@@ -65,7 +65,7 @@ library ieee;
 
 use work.axi4_lite_regs_user_pkg.all;
 
-entity axi4_lite_regs_slave is
+entity axi4_lite_regs_slave_vhd is
     generic (
         C_S_AXI_DATA_WIDTH : integer := 32;  -- must be 32 or 64
         C_S_AXI_ADDR_WIDTH : integer := 32
@@ -104,9 +104,9 @@ entity axi4_lite_regs_slave is
         S_AXI_RVALID  : out std_logic;
         S_AXI_RREADY  : in  std_logic
     );
-end entity axi4_lite_regs_slave;
+end entity axi4_lite_regs_slave_vhd;
 
-architecture rtl of axi4_lite_regs_slave is
+architecture rtl of axi4_lite_regs_slave_vhd is
 
     signal awaddr_q  : std_logic_vector(C_S_AXI_ADDR_WIDTH-1 downto 0);
     signal araddr_q  : std_logic_vector(C_S_AXI_ADDR_WIDTH-1 downto 0);
