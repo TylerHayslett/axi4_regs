@@ -257,8 +257,39 @@ module tb_axi4_regs_slave_sv;
     endtask
 
     //--------------------------------------------------------------------------
-    // AXI4-Lite single-beat write/read
+    // AXI4 burst read (INCR). Issues a single AR with len=beats-1 and
+    // collects up to `beats` R-channel beats, stopping early on RLAST.
+    // Returns the actual number of beats received.
     //--------------------------------------------------------------------------
+    task automatic axi_burst_read(
+        ref axi_bus_t b,
+        input  logic [ADDR_WIDTH-1:0] addr,
+        input  int                    beats,
+        output logic [DATA_WIDTH-1:0] data [],
+        output int                    received
+    );
+        data = new[beats];
+        received = 0;
+
+        @(posedge aclk);
+        b.araddr  <= addr;
+        b.arlen   <= beats[7:0] - 8'd1;
+        b.arsize  <= 3'd2;
+        b.arburst <= 2'b01;
+        b.arvalid <= 1'b1;
+        b.rready  <= 1'b1;
+
+        do @(posedge aclk); while (!(b.arvalid && b.arready));
+        b.arvalid <= 1'b0;
+
+        for (int i = 0; i < beats; i++) begin
+            do @(posedge aclk); while (!(b.rvalid && b.rready));
+            data[i] = b.rdata;
+            received++;
+            if (b.rlast) break;
+        end
+        b.rready <= 1'b0;
+    endtask
     task automatic axi_lite_write(
         ref axi_lite_bus_t b,
         input logic [ADDR_WIDTH-1:0] addr,
@@ -369,6 +400,21 @@ module tb_axi4_regs_slave_sv;
         join
         $display("[T4b] addr=0x00000034 sv=0x%08h sv_lite=0x%08h", sv_rd, sv_lite_rd);
         if (sv_rd !== sv_lite_rd) begin $display("      MISMATCH"); errors++; end
+
+        // -- Test 5: AXI4 burst read of 4 beats (full-AXI only).
+        // NOTE: the current slave drives RLAST = RVALID, so it returns a
+        // single beat regardless of ARLEN. This test reports beats received.
+        begin
+            logic [DATA_WIDTH-1:0] burst_data [];
+            int                    beats_rcv;
+            axi_burst_read(sv_bus, 32'h0000_0040, 4, burst_data, beats_rcv);
+            $display("[T5] burst read addr=0x00000040 requested=4 received=%0d", beats_rcv);
+            for (int i = 0; i < beats_rcv; i++)
+                $display("      sv burst[%0d]=0x%08h", i, burst_data[i]);
+            if (beats_rcv != 4) begin
+                $display("     NOTE: slave is single-beat only -- not counted as failure");
+            end
+        end
 
         repeat (10) @(posedge aclk);
 
