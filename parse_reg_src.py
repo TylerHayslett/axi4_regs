@@ -1,14 +1,79 @@
 
 import sys
+import signal
+import csv
 import pandas as pd
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableView,
     QFileDialog, QWidget, QVBoxLayout,
-    QPushButton, QHBoxLayout, QMessageBox
+    QPushButton, QHBoxLayout, QMessageBox,
+    QStyledItemDelegate, QTextEdit
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex
 
+class MultiLineDelegate(QStyledItemDelegate):
+    def __init__(self, table, multiline_columns=None):
+        super().__init__(table)
+        self.table = table
+        self.multiline_columns = multiline_columns or []
 
+    def createEditor(self, parent, option, index):
+        col_name = index.model()._df.columns[index.column()]
+
+        # Only use QTextEdit for selected columns
+        if col_name in self.multiline_columns:
+            editor = QTextEdit(parent)
+            editor.setAcceptRichText(False)
+
+            # Ctrl+Enter commits edit
+            def keyPressEvent(event):
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and \
+                   event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self.commitData.emit(editor)
+                    self.closeEditor.emit(editor)
+                else:
+                    QTextEdit.keyPressEvent(editor, event)
+
+                # Live resize while typing
+                self.auto_resize(editor)
+
+            editor.keyPressEvent = keyPressEvent
+
+            # Also resize on text change
+            editor.textChanged.connect(lambda: self.auto_resize(editor))
+
+            return editor
+
+        # Default editor for other columns
+        return super().createEditor(parent, option, index)
+
+    def setEditorData(self, editor, index):
+        if isinstance(editor, QTextEdit):
+            text = index.model().data(index, Qt.ItemDataRole.EditRole)
+            editor.setPlainText(text)
+            self.auto_resize(editor)
+        else:
+            super().setEditorData(editor, index)
+
+    def setModelData(self, editor, model, index):
+        if isinstance(editor, QTextEdit):
+            text = editor.toPlainText()
+            model.setData(index, text, Qt.ItemDataRole.EditRole)
+        else:
+            super().setModelData(editor, model, index)
+
+    def auto_resize(self, editor):
+        """Resize row height based on editor content"""
+        doc_height = editor.document().size().height()
+        row = self.table.currentIndex().row()
+
+        # Add some padding
+        new_height = int(doc_height) + 10
+
+        if new_height > self.table.rowHeight(row):
+            self.table.setRowHeight(row, new_height)
+            
+            
 class PandasModel(QAbstractTableModel):
     def __init__(self, df):
         super().__init__()
@@ -94,7 +159,7 @@ class PandasModel(QAbstractTableModel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Editable CSV Viewer")
+        self.setWindowTitle("AXI4 Regs Editor")
 
         self.table = QTableView()
 
@@ -136,7 +201,13 @@ class MainWindow(QMainWindow):
             
             self.model = PandasModel(df)
             self.table.setModel(self.model)
+            
+            # Choose which columns support multi-line editing
+            multiline_cols = ["Description"]  # change to your column names
 
+            delegate = MultiLineDelegate(self.table, multiline_cols)
+            self.table.setItemDelegate(delegate)
+            
             # Enable wrapping + resizing
             self.table.setWordWrap(True)
             self.table.resizeColumnsToContents()
@@ -152,7 +223,9 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
-            self.model._df.to_csv(file_path, index=False)
+            df_temp = self.model._df.copy(deep=True)
+            df_temp['Description'] = df_temp['Description'].str.replace('\n', r'\\n', regex=True)
+            df_temp.to_csv(file_path, index=False, quoting=csv.QUOTE_NONNUMERIC)
 
 
     def add_row(self):
@@ -185,6 +258,7 @@ class MainWindow(QMainWindow):
             self.model.removeRow(index.row())
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv)
     window = MainWindow()
     window.resize(900, 600)
