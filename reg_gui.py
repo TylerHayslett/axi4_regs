@@ -4,6 +4,11 @@ import sys
 import signal
 import csv
 import pandas as pd
+
+import write_dot_h
+import write_sys_verilog
+import write_uvm_ral
+import write_vhdl
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableView,
     QFileDialog, QWidget, QVBoxLayout,
@@ -169,17 +174,20 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton("Save CSV")
         add_btn = QPushButton("Add Row")
         del_btn = QPushButton("Delete Row")
+        gen_btn = QPushButton("Generate")
 
         load_btn.clicked.connect(self.load_csv)
         save_btn.clicked.connect(self.save_csv)
         add_btn.clicked.connect(self.add_row)
         del_btn.clicked.connect(self.delete_row)
+        gen_btn.clicked.connect(self.generate)
 
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(load_btn)
         btn_layout.addWidget(save_btn)
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(del_btn)
+        btn_layout.addWidget(gen_btn)
 
         layout = QVBoxLayout()
         layout.addLayout(btn_layout)
@@ -225,6 +233,9 @@ class MainWindow(QMainWindow):
 
         if file_path:
             df_temp = self.model._df.copy(deep=True)
+            # Drop rows where every cell is blank/NaN
+            df_temp = df_temp.replace(r'^\s*$', pd.NA, regex=True)
+            df_temp = df_temp.dropna(how='all').reset_index(drop=True)
             df_temp['Description'] = df_temp['Description'].str.replace('\n', r'\\n', regex=True)
             df_temp.to_csv(file_path, index=False, quoting=csv.QUOTE_NONNUMERIC)
 
@@ -257,6 +268,33 @@ class MainWindow(QMainWindow):
         # delete from bottom to top (safe for multiple selection)
         for index in sorted(selected, key=lambda x: x.row(), reverse=True):
             self.model.removeRow(index.row())
+
+    def generate(self):
+        if not self.model:
+            QMessageBox.warning(self, "No data", "Load a CSV before generating.")
+            return
+
+        df = self.model._df
+        modules = [
+            write_dot_h,
+            write_sys_verilog,
+            write_uvm_ral,
+            write_vhdl,
+        ]
+
+        results = []
+        for mod in modules:
+            func = getattr(mod, "write_rows_to_file", None)
+            if func is None:
+                results.append(f"{mod.__name__}: no write_rows_to_file() found, skipped")
+                continue
+            try:
+                func(df)
+                results.append(f"{mod.__name__}: ok")
+            except Exception as e:
+                results.append(f"{mod.__name__}: error - {e}")
+
+        QMessageBox.information(self, "Generate", "\n".join(results))
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal.SIG_DFL)
