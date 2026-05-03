@@ -9,22 +9,29 @@ import write_dot_h
 import write_sys_verilog
 import write_uvm_ral
 import write_vhdl
+import axi_reg_struct as axi_rs
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTableView,
     QFileDialog, QWidget, QVBoxLayout,
     QPushButton, QHBoxLayout, QMessageBox,
-    QStyledItemDelegate, QTextEdit
+    QStyledItemDelegate, QTextEdit, QLineEdit
 )
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QTimer
 
 class MultiLineDelegate(QStyledItemDelegate):
-    def __init__(self, table, multiline_columns=None):
+    def __init__(self, table, multiline_columns=None, allowed_values=None):
         super().__init__(table)
         self.table = table
         self.multiline_columns = multiline_columns or []
+        # Mapping {column_name: [allowed values...]} for restricted columns.
+        self.allowed_values = allowed_values or {}
+
+    def _column_name(self, index):
+        return index.model()._df.columns[index.column()]
 
     def createEditor(self, parent, option, index):
-        col_name = index.model()._df.columns[index.column()]
+        col_name = self._column_name(index)
 
         # Only use QTextEdit for selected columns
         if col_name in self.multiline_columns:
@@ -65,8 +72,25 @@ class MultiLineDelegate(QStyledItemDelegate):
         if isinstance(editor, QTextEdit):
             text = editor.toPlainText()
             model.setData(index, text, Qt.ItemDataRole.EditRole)
-        else:
-            super().setModelData(editor, model, index)
+            return
+
+        col_name = self._column_name(index)
+        if col_name in self.allowed_values and isinstance(editor, QLineEdit):
+            raw = editor.text().strip()
+            allowed = self.allowed_values[col_name]
+            match = next((a for a in allowed if a.lower() == raw.lower()), None)
+            if match is None:
+                QMessageBox.warning(
+                    self.table, f"Invalid {col_name}",
+                    f"'{raw}' is not allowed.\nAllowed values: {', '.join(allowed)}"
+                )
+                # Re-open the editor on this cell so focus stays here.
+                QTimer.singleShot(0, lambda: self.table.edit(index))
+                return
+            model.setData(index, match, Qt.ItemDataRole.EditRole)
+            return
+
+        super().setModelData(editor, model, index)
 
     def auto_resize(self, editor):
         """Resize row height based on editor content"""
@@ -78,8 +102,8 @@ class MultiLineDelegate(QStyledItemDelegate):
 
         if new_height > self.table.rowHeight(row):
             self.table.setRowHeight(row, new_height)
-            
-            
+
+
 class PandasModel(QAbstractTableModel):
     def __init__(self, df):
         super().__init__()
@@ -136,7 +160,7 @@ class PandasModel(QAbstractTableModel):
             return True
 
         return False
-    
+
     def insertRow(self, position, parent=QModelIndex()):
         self.beginInsertRows(QModelIndex(), position, position)
         position = position + 1
@@ -150,7 +174,7 @@ class PandasModel(QAbstractTableModel):
         self.endInsertRows()
         return True
 
-    
+
     def removeRow(self, position, parent=QModelIndex()):
         if position < 0 or position >= len(self._df):
             return False
@@ -205,18 +229,24 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
-            df = pd.read_csv(file_path)
-            df['Description'] = df['Description'].str.replace(r'\\n', '\n', regex=True)
-            
+            df = axi_rs.read_csv_to_df(file_path)
+
             self.model = PandasModel(df)
             self.table.setModel(self.model)
-            
-            # Choose which columns support multi-line editing
-            multiline_cols = ["Description"]  # change to your column names
 
-            delegate = MultiLineDelegate(self.table, multiline_cols)
+            # Choose which columns support multi-line editing
+            multiline_cols = ["Description"]
+
+            # Restricted-vocabulary columns: typed value must match one of
+            # these (case-insensitive); accepted entries are snapped to the
+            # canonical capitalization shown here.
+            allowed_values = {
+                "R/W/RW/etc.": ["R", "W", "RW", "RO", "WO", "COR", ""],
+            }
+
+            delegate = MultiLineDelegate(self.table, multiline_cols, allowed_values)
             self.table.setItemDelegate(delegate)
-            
+
             # Enable wrapping + resizing
             self.table.setWordWrap(True)
             self.table.resizeColumnsToContents()
@@ -232,24 +262,25 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
-            df_temp = self.model._df.copy(deep=True)
-            # Drop rows where every cell is blank/NaN
-            df_temp = df_temp.replace(r'^\s*$', pd.NA, regex=True)
-            df_temp = df_temp.dropna(how='all').reset_index(drop=True)
-            df_temp['Description'] = df_temp['Description'].str.replace('\n', r'\\n', regex=True)
-            df_temp.to_csv(file_path, index=False, quoting=csv.QUOTE_NONNUMERIC)
+            # Clean the DataFrame of whitespace before saving
+            self.model.beginResetModel()
+            self.model._df = axi_rs.clean_df(self.model._df)
+            self.model.endResetModel()
+
+            axi_rs.write_df_to_csv(self.model._df, file_path)
+
 
 
     def add_row(self):
         if not self.model:
             return
-            
+
         selected = self.table.selectionModel().selectedRows()
-        
+
         if not selected:
             QMessageBox.warning(self, "No selection", "Select a row to add below.")
             return
-            
+
         # add from bottom to top (safe for multiple selection)
         for index in sorted(selected, key=lambda x: x.row(), reverse=True):
             self.model.insertRow(index.row())
@@ -275,6 +306,12 @@ class MainWindow(QMainWindow):
             return
 
         df = self.model._df
+
+        self.model.beginResetModel()
+        self.model._df = axi_rs.clean_df(self.model._df)
+        self.model._df = axi_rs.parse_regs(self.model._df)
+        self.model.endResetModel()
+
         modules = [
             write_dot_h,
             write_sys_verilog,
@@ -289,7 +326,7 @@ class MainWindow(QMainWindow):
                 results.append(f"{mod.__name__}: no write_rows_to_file() found, skipped")
                 continue
             try:
-                func(df)
+                func(self.model._df)
                 results.append(f"{mod.__name__}: ok")
             except Exception as e:
                 results.append(f"{mod.__name__}: error - {e}")

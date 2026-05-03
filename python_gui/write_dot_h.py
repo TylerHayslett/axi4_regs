@@ -3,6 +3,7 @@
 
 def write_rows_to_file(df, filename="output.h"):
     """Write each row of a pandas DataFrame to a line in the given file."""
+    print("Writing DataFrame to " + filename)
     with open(filename, "w") as f:
         f.write("// Auto-generated header file\n")
         f.write("#ifndef OUTPUT_H\n")
